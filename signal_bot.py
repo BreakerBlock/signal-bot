@@ -34,12 +34,13 @@ IST = pytz.timezone("Asia/Kolkata")
 
 SECTIONS = [
     ("india_politics", "INDIAN POLITICS",    "last 24 hours", (244, 162, 90)),
-    ("india_legal",    "COURTS & LAW",       "last 6 hours",  (232, 168, 124)),
-    ("india_general",  "INDIA",              "last 6 hours",  (212, 168, 71)),
-    ("global",         "GLOBAL",             "last 6 hours",  (155, 142, 196)),
-    ("technology",     "TECHNOLOGY",         "last 6 hours",  (126, 184, 201)),
-    ("science",        "SCIENCE",            "last 6 hours",  (184, 201, 126)),
-    ("business",       "BUSINESS & ECONOMY", "last 6 hours",  (126, 196, 168)),
+    ("india_legal",    "COURTS & LAW",       "last 24 hours", (232, 168, 124)),
+    ("india_general",  "INDIA",              "last 24 hours", (212, 168, 71)),
+    ("global",         "GLOBAL",             "last 24 hours", (155, 142, 196)),
+    ("technology",     "TECHNOLOGY",         "last 24 hours", (126, 184, 201)),
+    ("science",        "SCIENCE",            "last 24 hours", (184, 201, 126)),
+    ("business",       "BUSINESS & ECONOMY", "last 24 hours", (126, 196, 168)),
+    ("sports",         "SPORTS",             "last 24 hours", (196, 126, 155)),
 ]
 
 
@@ -60,11 +61,11 @@ You must search for news from the LAST 6 HOURS ONLY. Anything older must be excl
 - Search "Sensex Nifty today {date_str}"
 - Search any trending topic you find on X/Twitter right now
 
-STRICT RULE: For INDIA POLITICS only — include stories from the last 24 hours. For ALL OTHER sections — only include stories from the last 6 hours. If a section has no fresh news, write "No major developments in this window" for that bullet.
+STRICT RULE: Include stories from the last 24 hours across ALL sections. If a section has no fresh news in 24 hours, write "No major developments in the last 24 hours" for that bullet.
 
 Your ENTIRE response must be ONLY a raw JSON object. First character must be {{ and last must be }}.
 
-{{"india_politics":["s1","s2","s3","s4","s5"],"india_legal":["s1","s2","s3","s4","s5"],"india_general":["s1","s2","s3","s4","s5"],"global":["s1","s2","s3","s4","s5"],"technology":["s1","s2","s3","s4","s5"],"science":["s1","s2","s3","s4","s5"],"business":["s1","s2","s3","s4","s5"]}}
+{{"india_politics":["s1","s2","s3","s4","s5"],"india_legal":["s1","s2","s3","s4","s5"],"india_general":["s1","s2","s3","s4","s5"],"global":["s1","s2","s3","s4","s5"],"technology":["s1","s2","s3","s4","s5"],"science":["s1","s2","s3","s4","s5"],"business":["s1","s2","s3","s4","s5"],"sports":["s1","s2","s3","s4","s5"]}}
 
 Each array: 5-7 strings. Each string: one fact-dense sentence with real names, places, numbers.
 
@@ -74,7 +75,8 @@ india_general: Accidents, cricket, social issues, deaths, trending stories on X 
 global: Breaking internationally — wars, diplomacy, elections, major incidents from last 6 hours.
 technology: AI news, big tech, Indian startups, govt digital policy, cybersecurity from TODAY.
 science: ISRO, space missions, medical breakthroughs, climate, health alerts from TODAY.
-business: Sensex/Nifty numbers today, RBI actions, corporate deals, FII flows, unicorn news."""
+business: Sensex/Nifty numbers today, RBI actions, corporate deals, FII flows, unicorn news.
+sports: Cricket (IPL, Test matches, scores), football, kabaddi, Olympics news, Indian athlete achievements, major international sports results from last 24 hours."""
 
 
 def fetch_briefing():
@@ -82,12 +84,25 @@ def fetch_briefing():
     print(f"[{now.strftime('%H:%M IST')}] Fetching briefing...")
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4000,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": build_prompt(now)}]
-    )
+
+    # Retry up to 3 times on rate limit (429) errors
+    message = None
+    for attempt in range(3):
+        try:
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4000,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": build_prompt(now)}]
+            )
+            break
+        except Exception as e:
+            if "rate_limit" in str(e).lower() and attempt < 2:
+                wait = 60 * (attempt + 1)  # 60s then 120s
+                print(f"Rate limit hit. Retrying in {wait}s (attempt {attempt+2}/3)...")
+                time.sleep(wait)
+            else:
+                raise
 
     raw = ""
     for block in message.content:
@@ -241,7 +256,7 @@ def run_briefing():
         caption  = (
             f"📡 *SIGNAL BRIEFING*\n"
             f"_{now.strftime('%d %b %Y')} · {now.strftime('%I:%M %p IST')}_\n"
-            f"_Next briefing in 2 hours_"
+            f"_Next briefing in 24 hours_"
         )
         send_telegram_pdf(pdf_buf, filename, caption)
         print(f"✓ PDF sent at {now.strftime('%H:%M IST')}")
@@ -261,9 +276,9 @@ def main():
         run_briefing()
     else:
         print("SIGNAL Bot starting (continuous mode)...")
-        print("Scheduled every 2 hours. First run immediately.\n")
+        print("Scheduled every 24 hours. First run immediately.\n")
         run_briefing()
-        schedule.every(2).hours.do(run_briefing)
+        schedule.every(24).hours.do(run_briefing)
         while True:
             schedule.run_pending()
             time.sleep(30)
