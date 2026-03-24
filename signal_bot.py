@@ -1,8 +1,6 @@
 """
 SIGNAL — Telegram Briefing Bot
-Sends an India-focused news briefing to your Telegram every 2 hours.
-
-Setup instructions at the bottom of this file.
+Sends a styled PDF briefing to your Telegram every 2 hours.
 """
 
 import anthropic
@@ -10,12 +8,12 @@ import requests
 import json
 import schedule
 import time
+import os, sys
 from datetime import datetime
+from io import BytesIO
 import pytz
 
 # ── CONFIG — loaded from environment variables ────────────────────────────
-import os, sys, time
-
 def get_env(key):
     val = os.environ.get(key)
     if not val:
@@ -30,19 +28,19 @@ def get_env(key):
 ANTHROPIC_API_KEY  = get_env("ANTHROPIC_API_KEY")
 TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = get_env("TELEGRAM_CHAT_ID")
-# ───────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
 
 IST = pytz.timezone("Asia/Kolkata")
 
-SECTION_META = {
-    "india_politics": ("🇮🇳 INDIAN POLITICS",    "last 24 hours"),
-    "india_legal":    ("⚖️ COURTS & LAW",         "last 6 hours"),
-    "india_general":  ("📰 INDIA",                "last 6 hours"),
-    "global":         ("🌍 GLOBAL",               "last 6 hours"),
-    "technology":     ("💻 TECHNOLOGY",           "last 6 hours"),
-    "science":        ("🔬 SCIENCE",              "last 6 hours"),
-    "business":       ("📈 BUSINESS & ECONOMY",   "last 6 hours"),
-}
+SECTIONS = [
+    ("india_politics", "INDIAN POLITICS",    "last 24 hours", (244, 162, 90)),
+    ("india_legal",    "COURTS & LAW",       "last 6 hours",  (232, 168, 124)),
+    ("india_general",  "INDIA",              "last 6 hours",  (212, 168, 71)),
+    ("global",         "GLOBAL",             "last 6 hours",  (155, 142, 196)),
+    ("technology",     "TECHNOLOGY",         "last 6 hours",  (126, 184, 201)),
+    ("science",        "SCIENCE",            "last 6 hours",  (184, 201, 126)),
+    ("business",       "BUSINESS & ECONOMY", "last 6 hours",  (126, 196, 168)),
+]
 
 
 def get_ist_now():
@@ -84,7 +82,6 @@ def fetch_briefing():
     print(f"[{now.strftime('%H:%M IST')}] Fetching briefing...")
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=4000,
@@ -92,19 +89,16 @@ def fetch_briefing():
         messages=[{"role": "user", "content": build_prompt(now)}]
     )
 
-    # Extract text from response
     raw = ""
     for block in message.content:
         if block.type == "text":
             raw += block.text
 
-    # Parse JSON robustly
     first = raw.index("{")
     last  = raw.rindex("}") + 1
     data  = json.loads(raw[first:last])
 
-    # Normalise to lists
-    for key in SECTION_META:
+    for key, *_ in SECTIONS:
         val = data.get(key, [])
         if isinstance(val, str):
             val = [v.strip() for v in val.split("\n") if v.strip()]
@@ -113,49 +107,120 @@ def fetch_briefing():
     return data, now
 
 
-def format_telegram_message(data, now):
-    edition_hour = (now.hour // 2) * 2
-    edition = f"{edition_hour:02d}:00"
-    date_str = now.strftime("%d %b %Y")
-    time_str = now.strftime("%I:%M %p IST")
+def generate_pdf(data, now):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
 
-    lines = [
-        "━━━━━━━━━━━━━━━━━━━━",
-        f"📡 *SIGNAL BRIEFING*",
-        f"_{date_str} · Edition {edition}_",
-        f"_Fetched at {time_str}_",
-        "━━━━━━━━━━━━━━━━━━━━",
-        ""
-    ]
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=20*mm, rightMargin=20*mm,
+        topMargin=16*mm, bottomMargin=16*mm,
+    )
 
-    for key, (label, window) in SECTION_META.items():
-        bullets = data.get(key, [])
-        lines.append(f"*{label}*  `{window}`")
+    BG      = colors.HexColor("#0a0a0a")
+    SURFACE = colors.HexColor("#111111")
+    BORDER  = colors.HexColor("#1e1e1e")
+    ACCENT  = colors.HexColor("#e8d5a3")
+    MUTED   = colors.HexColor("#555550")
+    TEXT    = colors.HexColor("#c8c8c0")
+    WHITE   = colors.HexColor("#e0e0d8")
+
+    logo_sty    = ParagraphStyle("logo",   fontName="Helvetica-Bold", fontSize=22, textColor=ACCENT, leading=26)
+    sub_sty     = ParagraphStyle("sub",    fontName="Helvetica", fontSize=7, textColor=MUTED, leading=10, spaceBefore=2)
+    date_sty    = ParagraphStyle("date",   fontName="Helvetica-Bold", fontSize=15, textColor=WHITE, leading=19, spaceBefore=6)
+    meta_sty    = ParagraphStyle("meta",   fontName="Helvetica", fontSize=7.5, textColor=MUTED, leading=11)
+    sec_sty     = ParagraphStyle("sec",    fontName="Helvetica-Bold", fontSize=8.5, textColor=WHITE, leading=12, letterSpacing=1.5)
+    win_sty     = ParagraphStyle("win",    fontName="Helvetica", fontSize=7, textColor=MUTED, leading=10)
+    bullet_sty  = ParagraphStyle("bullet", fontName="Helvetica", fontSize=9, textColor=TEXT, leading=14, leftIndent=10, spaceBefore=3)
+    footer_sty  = ParagraphStyle("footer", fontName="Helvetica", fontSize=7, textColor=MUTED, leading=10, alignment=TA_CENTER)
+
+    date_str   = now.strftime("%A, %d %B %Y")
+    time_str   = now.strftime("%I:%M %p IST")
+    edition_hr = (now.hour // 2) * 2
+    edition    = f"EDITION {edition_hr:02d}:00 – {edition_hr+2:02d}:00 IST"
+
+    story = []
+
+    # Header
+    story.append(Paragraph("SIGNAL", logo_sty))
+    story.append(Paragraph("X INTELLIGENCE BRIEFING  &middot;  INDIA POLITICS &amp; LEGAL FOCUS", sub_sty))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=6))
+    story.append(Paragraph(date_str, date_sty))
+    story.append(Paragraph(f"{edition}  &middot;  Fetched at {time_str}", meta_sty))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceBefore=8, spaceAfter=14))
+
+    # Sections
+    for key, label, window, rgb in SECTIONS:
+        sec_color = colors.Color(rgb[0]/255, rgb[1]/255, rgb[2]/255)
+        hex_col   = "%02x%02x%02x" % rgb
+        bullets   = data.get(key, [])
+
+        # Label row
+        hdr = Table([[
+            Paragraph(f'<font color="#{hex_col}">&#9646; {label}</font>', sec_sty),
+            Paragraph(window.upper(), win_sty),
+        ]], colWidths=["75%", "25%"])
+        hdr.setStyle(TableStyle([
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN",         (1,0), (1,0),   "RIGHT"),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("TOPPADDING",    (0,0), (-1,-1), 0),
+        ]))
+        story.append(hdr)
+
+        # Bullet card
+        items = []
         for b in bullets:
-            # Escape markdown special chars in bullet text
-            safe = b.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("`", "\\`")
-            lines.append(f"▸ {safe}")
-        lines.append("")
+            safe = b.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            items.append(Paragraph(f'<font color="#{hex_col}">&#9658;</font>  {safe}', bullet_sty))
 
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append("_Next briefing in 2 hours_")
+        card = Table([[items]], colWidths=["100%"])
+        card.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,-1), SURFACE),
+            ("LEFTPADDING",   (0,0), (-1,-1), 10),
+            ("RIGHTPADDING",  (0,0), (-1,-1), 10),
+            ("TOPPADDING",    (0,0), (-1,-1), 8),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+            ("LINEBEFORE",    (0,0), (0,-1),  3, sec_color),
+            ("BOX",           (0,0), (-1,-1), 0.5, BORDER),
+        ]))
+        story.append(card)
+        story.append(Spacer(1, 10))
 
-    return "\n".join(lines)
+    # Footer
+    story.append(HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceBefore=4, spaceAfter=6))
+    story.append(Paragraph(
+        f"SIGNAL  &middot;  7 SECTIONS  &middot;  INDIA POLITICS &amp; LEGAL PRIORITY  &middot;  {time_str}",
+        footer_sty
+    ))
+
+    def draw_bg(canvas, doc):
+        canvas.saveState()
+        canvas.setFillColor(BG)
+        canvas.rect(0, 0, A4[0], A4[1], fill=1, stroke=0)
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=draw_bg, onLaterPages=draw_bg)
+    buf.seek(0)
+    return buf
 
 
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    # Split into chunks if message too long (Telegram limit: 4096 chars)
-    chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-    for chunk in chunks:
-        resp = requests.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": chunk,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True
-        })
-        if not resp.ok:
-            print(f"Telegram error: {resp.text}")
+def send_telegram_pdf(pdf_buf, filename, caption):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    resp = requests.post(url, data={
+        "chat_id": TELEGRAM_CHAT_ID,
+        "caption": caption,
+        "parse_mode": "Markdown",
+    }, files={
+        "document": (filename, pdf_buf, "application/pdf")
+    })
+    if not resp.ok:
+        print(f"Telegram PDF error: {resp.text}")
 
 
 def send_error_notification(err):
@@ -170,11 +235,19 @@ def send_error_notification(err):
 def run_briefing():
     try:
         data, now = fetch_briefing()
-        msg = format_telegram_message(data, now)
-        send_telegram(msg)
-        print(f"✓ Sent at {now.strftime('%H:%M IST')}")
+        print(f"[{now.strftime('%H:%M IST')}] Generating PDF...")
+        pdf_buf  = generate_pdf(data, now)
+        filename = f"SIGNAL_{now.strftime('%d%b%Y_%H%M')}.pdf"
+        caption  = (
+            f"📡 *SIGNAL BRIEFING*\n"
+            f"_{now.strftime('%d %b %Y')} · {now.strftime('%I:%M %p IST')}_\n"
+            f"_Next briefing in 2 hours_"
+        )
+        send_telegram_pdf(pdf_buf, filename, caption)
+        print(f"✓ PDF sent at {now.strftime('%H:%M IST')}")
     except Exception as e:
         print(f"✗ Error: {e}")
+        import traceback; traceback.print_exc()
         try:
             send_error_notification(e)
         except:
@@ -182,17 +255,13 @@ def run_briefing():
 
 
 def main():
-    import sys
     once = "--once" in sys.argv
-
     if once:
-        # Single run mode — for PythonAnywhere scheduled tasks
         print(f"SIGNAL running once at {get_ist_now().strftime('%H:%M IST')}")
         run_briefing()
     else:
-        # Continuous mode — runs every 2 hours
         print("SIGNAL Bot starting (continuous mode)...")
-        print(f"Scheduled every 2 hours. First run immediately.\n")
+        print("Scheduled every 2 hours. First run immediately.\n")
         run_briefing()
         schedule.every(2).hours.do(run_briefing)
         while True:
