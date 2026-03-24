@@ -13,11 +13,23 @@ import time
 from datetime import datetime
 import pytz
 
-# ── CONFIG — loaded from Railway environment variables ─────────────────────
-import os
-ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
+# ── CONFIG — loaded from environment variables ────────────────────────────
+import os, sys, time
+
+def get_env(key):
+    val = os.environ.get(key)
+    if not val:
+        print(f"[SIGNAL] Waiting for env var: {key} ...")
+        time.sleep(5)
+        val = os.environ.get(key)
+    if not val:
+        print(f"[SIGNAL] ERROR: {key} not set. Check Railway Variables tab.")
+        sys.exit(1)
+    return val
+
+ANTHROPIC_API_KEY  = get_env("ANTHROPIC_API_KEY")
+TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = get_env("TELEGRAM_CHAT_ID")
 # ───────────────────────────────────────────────────────────────────────────
 
 IST = pytz.timezone("Asia/Kolkata")
