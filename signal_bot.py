@@ -48,35 +48,131 @@ def get_ist_now():
     return datetime.now(IST)
 
 
+SECTION_ACCOUNTS = {
+    "india_politics": [
+        # News agencies & outlets
+        "ANI", "PTI_News", "the_hindu", "IndianExpress", "ndtv",
+        # Journalists
+        "ShekharGupta", "sardesairajdeep", "BDUTT", "adarshsachdeva", "sushant_says",
+        # Policy / intellectual
+        "Ram_Guha", "orfonline", "CPR_India",
+        # Politicians (for direct narrative)
+        "narendramodi", "RahulGandhi", "AmitShah",
+    ],
+    "india_legal": [
+        "LiveLawIndia", "barandbench", "lawbeatind",
+        "aparanjape", "sudhir_krishnas", "MenonBio",
+        "SCJudgments", "IndianKanoon",
+    ],
+    "india_general": [
+        "IndiaToday", "thewire_in", "scroll_in", "newslaundry", "BBCIndia", "ReutersIndia",
+        "sanjeevsanyal", "NikhilKamathcio", "harshmadhusudan",
+    ],
+    "global": [
+        "Reuters", "AP", "FT", "BBCWorld", "WSJ",
+        "ianbremmer", "farnazfassihi", "maxseddon",
+    ],
+    "technology": [
+        "sama", "elonmusk", "demishassabis", "karpathy",
+        "TechCrunch", "verge", "benedictevans",
+    ],
+    "science": [
+        "NatureNews", "newscientist", "ScienceMagazine", "BBCScienceNews",
+        "neiltyson", "edyong209", "EricTopol",
+    ],
+    "business": [
+        "FinMinIndia", "RBI", "business_standard", "livemint",
+        "zerodhaonline", "pranjalkamra", "safalniveshak",
+        "RayDalio", "paulkrugman", "TheEconomist",
+    ],
+    "sports": [
+        "FabrizioRomano", "David_Ornstein", "SkySportsPL",
+        "ESPNcricinfo", "cricbuzz", "bhogleharsha",
+        "atptour", "WTA", "BenRothenberg",
+        "BBCSport", "ESPN",
+    ],
+}
+
+
 def build_prompt(now):
     date_str = now.strftime("%A, %d %B %Y")
     time_str = now.strftime("%I:%M %p IST")
+
+    def acct_hint(key):
+        handles = SECTION_ACCOUNTS.get(key, [])
+        joined = ", ".join(f"@{h}" for h in handles)
+        # Use top 6 handles for site: search queries
+        site_q = " OR ".join(f"site:x.com/{h}" for h in handles[:6])
+        return joined, site_q
+
+    pol_h,  pol_q  = acct_hint("india_politics")
+    leg_h,  leg_q  = acct_hint("india_legal")
+    gen_h,  gen_q  = acct_hint("india_general")
+    glob_h, glob_q = acct_hint("global")
+    tech_h, tech_q = acct_hint("technology")
+    sci_h,  sci_q  = acct_hint("science")
+    biz_h,  biz_q  = acct_hint("business")
+    spt_h,  spt_q  = acct_hint("sports")
+
     return f"""TODAY IS {date_str}. CURRENT TIME: {time_str}.
 
-You must search for news from the LAST 6 HOURS ONLY. Anything older must be excluded. Do multiple targeted searches:
-- Search "site:x.com trending India {date_str}"
-- Search "India politics news last 6 hours {date_str}"
-- Search "Supreme Court India today {date_str}"
-- Search "India breaking news {date_str}"
-- Search "Sensex Nifty today {date_str}"
-- Search any trending topic you find on X/Twitter right now
+You are SIGNAL, an intelligence briefing bot. Surface the most important stories from the LAST 24 HOURS by searching across a curated set of trusted X/Twitter accounts and their associated outlets. Triangulate across media + analysts + primary sources to get as close to ground truth as possible.
 
-STRICT RULE: Include stories from the last 24 hours across ALL sections. If a section has no fresh news in 24 hours, write "No major developments in the last 24 hours" for that bullet.
+SEARCH STRATEGY — for each section, prioritise posts and articles from the accounts listed:
+
+1. INDIAN POLITICS — accounts: {pol_h}
+   Search: "{pol_q} India politics {date_str}"
+   Also search: "ANI PTI_News IndianExpress India politics news today {date_str}"
+
+2. COURTS & LAW — accounts: {leg_h}
+   Search: "{leg_q} court ruling {date_str}"
+   Also search: "LiveLawIndia barandbench Supreme Court India today {date_str}"
+
+3. INDIA GENERAL — accounts: {gen_h}
+   Search: "{gen_q} India news {date_str}"
+   Also search: "thewire_in scroll_in IndiaToday trending India {date_str}"
+
+4. GLOBAL — accounts: {glob_h}
+   Search: "{glob_q} world news {date_str}"
+   Also search: "Reuters AP BBCWorld breaking international news {date_str}"
+
+5. TECHNOLOGY — accounts: {tech_h}
+   Search: "{tech_q} tech AI {date_str}"
+   Also search: "sama karpathy TechCrunch verge AI announcement {date_str}"
+
+6. SCIENCE — accounts: {sci_h}
+   Search: "{sci_q} science {date_str}"
+   Also search: "NatureNews EricTopol science breakthrough {date_str}"
+
+7. BUSINESS & ECONOMY — accounts: {biz_h}
+   Search: "{biz_q} markets economy {date_str}"
+   Also search: "Sensex Nifty RBI livemint business_standard {date_str}"
+
+8. SPORTS — accounts: {spt_h}
+   Search: "{spt_q} sports {date_str}"
+   Also search: "ESPNcricinfo FabrizioRomano cricket football results {date_str}"
+
+STRICT RULES:
+- Every bullet must trace back to a post or article from one of the listed accounts, or their outlet's website.
+- Append the source handle at the end of each bullet in the format "— via @Handle".
+- If you cannot find fresh news from tracked accounts in a section, write "No major developments reported by tracked accounts in the last 24 hours."
+- Do NOT invent or hallucinate stories. Only report what you can verify via search.
+- Prefer primary sources (the account's own words / their outlet's article) over secondary aggregators.
 
 Your ENTIRE response must be ONLY a raw JSON object. First character must be {{ and last must be }}.
 
 {{"india_politics":["s1","s2","s3","s4","s5"],"india_legal":["s1","s2","s3","s4","s5"],"india_general":["s1","s2","s3","s4","s5"],"global":["s1","s2","s3","s4","s5"],"technology":["s1","s2","s3","s4","s5"],"science":["s1","s2","s3","s4","s5"],"business":["s1","s2","s3","s4","s5"],"sports":["s1","s2","s3","s4","s5"]}}
 
-Each array: 5-7 strings. Each string: one fact-dense sentence with real names, places, numbers.
+Each array: 5-7 strings. Each string: one fact-dense sentence with real names, numbers, and source handle appended (e.g. "— via @LiveLawIndia").
 
-india_politics: Last 24 hours — BJP, Congress, AAP, TMC, Modi govt, Parliament, state elections, controversies, minister statements.
-india_legal: Supreme Court orders TODAY, High Court rulings, CBI/ED arrests, bail hearings, PIL filings, PMLA, SEBI orders.
-india_general: Accidents, cricket, social issues, deaths, trending stories on X today.
-global: Breaking internationally — wars, diplomacy, elections, major incidents from last 6 hours.
-technology: AI news, big tech, Indian startups, govt digital policy, cybersecurity from TODAY.
-science: ISRO, space missions, medical breakthroughs, climate, health alerts from TODAY.
-business: Sensex/Nifty numbers today, RBI actions, corporate deals, FII flows, unicorn news.
-sports: Cricket (IPL, Test matches, scores), football, kabaddi, Olympics news, Indian athlete achievements, major international sports results from last 24 hours."""
+india_politics: BJP, Congress, AAP, TMC, Modi govt, Parliament, state elections, controversies, minister statements — from @ANI, @PTI_News, @ShekharGupta, @BDUTT, @narendramodi, @RahulGandhi, @AmitShah etc.
+india_legal: Supreme Court orders, High Court rulings, CBI/ED arrests, bail hearings, PIL filings, PMLA, SEBI — from @LiveLawIndia, @barandbench, @SCJudgments etc.
+india_general: Society, accidents, social issues, trending India stories — from @IndiaToday, @thewire_in, @scroll_in, @BBCIndia etc.
+global: Wars, diplomacy, elections, major international incidents — from @Reuters, @AP, @BBCWorld, @ianbremmer, @farnazfassihi etc.
+technology: AI announcements, big tech, Indian startups, cybersecurity — from @sama, @karpathy, @TechCrunch, @verge etc.
+science: Space, medical breakthroughs, climate, ISRO — from @NatureNews, @EricTopol, @BBCScienceNews etc.
+business: Sensex/Nifty levels, RBI actions, corporate deals, macro moves — from @RBI, @livemint, @business_standard, @TheEconomist etc.
+sports: IPL/cricket scores, football transfers, tennis results, Indian athletes — from @ESPNcricinfo, @cricbuzz, @FabrizioRomano, @bhogleharsha etc."""
 
 
 def fetch_briefing():
