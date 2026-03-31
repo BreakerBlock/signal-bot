@@ -33,14 +33,14 @@ TELEGRAM_CHAT_ID   = get_env("TELEGRAM_CHAT_ID")
 IST = pytz.timezone("Asia/Kolkata")
 
 SECTIONS = [
-    ("india_politics", "INDIAN POLITICS",    "last 24 hours", (244, 162, 90)),
-    ("india_legal",    "COURTS & LAW",       "last 24 hours", (232, 168, 124)),
-    ("india_general",  "INDIA",              "last 24 hours", (212, 168, 71)),
-    ("global",         "GLOBAL",             "last 24 hours", (155, 142, 196)),
-    ("technology",     "TECHNOLOGY",         "last 24 hours", (126, 184, 201)),
-    ("science",        "SCIENCE",            "last 24 hours", (184, 201, 126)),
-    ("business",       "BUSINESS & ECONOMY", "last 24 hours", (126, 196, 168)),
-    ("sports",         "SPORTS",             "last 24 hours", (196, 126, 155)),
+    ("india_politics", "INDIAN POLITICS",    "last 12 hours", (244, 162, 90)),
+    ("india_legal",    "COURTS & LAW",       "last 12 hours", (232, 168, 124)),
+    ("india_general",  "INDIA",              "last 12 hours", (212, 168, 71)),
+    ("global",         "GLOBAL",             "last 12 hours", (155, 142, 196)),
+    ("technology",     "TECHNOLOGY",         "last 12 hours", (126, 184, 201)),
+    ("science",        "SCIENCE",            "last 12 hours", (184, 201, 126)),
+    ("business",       "BUSINESS & ECONOMY", "last 12 hours", (126, 196, 168)),
+    ("sports",         "SPORTS",             "last 12 hours", (196, 126, 155)),
 ]
 
 
@@ -153,9 +153,11 @@ SEARCH STRATEGY — for each section, prioritise posts and articles from the acc
    Also search: "ESPNcricinfo FabrizioRomano cricket football results {date_str}"
 
 STRICT RULES:
+- TIME WINDOW: Last 12 hours only. Today is {date_str}.
 - Every bullet must trace back to a post or article from one of the listed accounts, or their outlet's website.
 - Append the source handle at the end of each bullet in the format "— via @Handle".
-- If you cannot find fresh news from tracked accounts in a section, write "No major developments reported by tracked accounts in the last 24 hours."
+- NEVER write "No major developments". There is ALWAYS news. If your first search yields little, run 2-3 more targeted searches with different keywords before writing any bullet. You must find at least 5 stories per section.
+- If a section's primary accounts are quiet, expand to their outlet's main website (e.g. thehindu.com, ndtv.com, livemint.com, reuters.com) and report from there — still tag the closest matching handle.
 - Do NOT invent or hallucinate stories. Only report what you can verify via search.
 - Prefer primary sources (the account's own words / their outlet's article) over secondary aggregators.
 
@@ -209,11 +211,31 @@ def fetch_briefing():
     last  = raw.rindex("}") + 1
     data  = json.loads(raw[first:last])
 
+    def clean_bullet(text):
+        import re
+        # Strip ... tags — keep inner text only
+        text = re.sub(r']*>(.*?)', r'\1', text, flags=re.DOTALL)
+        # Strip any other stray HTML/XML tags
+        text = re.sub(r'<[^>]+>', '', text)
+        # Strip citation index patterns like [1-2], [0-3,1-4]
+        text = re.sub(r'\[\d+[-,]?\d*\]', '', text)
+        # Strip leftover index= artifacts
+        text = re.sub(r'index="[^"]*"', '', text)
+        # Collapse multiple spaces
+        text = re.sub(r'  +', ' ', text)
+        return text.strip()
+
     for key, *_ in SECTIONS:
         val = data.get(key, [])
         if isinstance(val, str):
             val = [v.strip() for v in val.split("\n") if v.strip()]
-        data[key] = val or ["No data found."]
+        # Clean each bullet and filter out empty or cop-out lines
+        cleaned = []
+        for b in val:
+            b = clean_bullet(b)
+            if b and "no major development" not in b.lower() and "no data" not in b.lower():
+                cleaned.append(b)
+        data[key] = cleaned or ["Searching for updates — check next edition."]
 
     return data, now
 
