@@ -104,7 +104,8 @@ def fetch_briefing():
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=120.0)
 
-    # ── Turn 1: search ────────────────────────────────────────────────────────
+    # -- Turn 1: search
+    last_exc = None
     turn1 = None
     for attempt in range(3):
         try:
@@ -114,15 +115,20 @@ def fetch_briefing():
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 messages=[{"role": "user", "content": build_search_prompt(now)}]
             )
+            last_exc = None
             break
-        except anthropic.RateLimitError:
+        except anthropic.RateLimitError as e:
+            last_exc = e
             wait = 60 * (attempt + 1)
             print(f"Rate limit. Retrying in {wait}s...")
             time.sleep(wait)
-        except Exception:
-            if attempt == 2:
-                raise
+        except Exception as e:
+            last_exc = e
+            print(f"API error (attempt {attempt+1}/3): {e}")
             time.sleep(30)
+
+    if turn1 is None:
+        raise RuntimeError(f"Turn 1 failed after 3 attempts: {last_exc}")
 
     print(f"[DEBUG] Turn1 stop_reason={turn1.stop_reason}, blocks={[b.type for b in turn1.content]}")
 
