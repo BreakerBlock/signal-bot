@@ -207,6 +207,33 @@ def fetch_briefing():
         if block.type == "text":
             raw += block.text
 
+    # Log raw for debugging
+    print(f"[DEBUG] Raw response length: {len(raw)}")
+    print(f"[DEBUG] Raw preview: {raw[:300]}")
+
+    # If Claude returned no JSON (only tool-use blocks), send a follow-up
+    # turn to force it to produce the JSON from its search results.
+    if "{" not in raw:
+        print("[DEBUG] No JSON in first response — sending follow-up turn...")
+        follow_up = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4000,
+            messages=[
+                {"role": "user", "content": build_prompt(now)},
+                {"role": "assistant", "content": message.content},
+                {"role": "user", "content": (
+                    "You have finished searching. Now produce ONLY the JSON object "
+                    "with the 8 keys as instructed. No prose, no markdown fences, "
+                    "no explanation. First character must be { and last must be }."
+                )},
+            ]
+        )
+        raw = ""
+        for block in follow_up.content:
+            if block.type == "text":
+                raw += block.text
+        print(f"[DEBUG] Follow-up raw preview: {raw[:300]}")
+
     first = raw.index("{")
     last  = raw.rindex("}") + 1
     data  = json.loads(raw[first:last])
