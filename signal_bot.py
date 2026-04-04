@@ -67,13 +67,13 @@ def build_search_prompt(now):
     date_str = now.strftime("%A, %d %B %Y")
     time_str = now.strftime("%I:%M %p IST")
     searches = "\n".join(
-        f"{i+1}. {label}: search \"{SECTION_SEARCHES[key]} {date_str}\""
+        f"{i+1}. {label}: {SECTION_SEARCHES[key]}"
         for i, (key, label, _, _) in enumerate(SECTIONS)
     )
     return (
-        f"Today is {date_str}, {time_str}.\n\n"
-        f"Search for the top news story from the last 12 hours for each topic below. "
-        f"Do one search per topic.\n\n{searches}"
+        f"Today is {date_str}.\n"
+        f"Search each topic for news in the last 12 hours. One search per topic.\n\n"
+        f"{searches}"
     )
 
 
@@ -110,7 +110,7 @@ def fetch_briefing():
     for attempt in range(3):
         try:
             turn1 = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=4000,
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 messages=[{"role": "user", "content": build_search_prompt(now)}]
@@ -119,7 +119,7 @@ def fetch_briefing():
             break
         except anthropic.RateLimitError as e:
             last_exc = e
-            wait = 60 * (attempt + 1)
+            wait = 90 * (attempt + 1)   # 90s, 180s -- let token bucket refill
             print(f"Rate limit. Retrying in {wait}s...")
             time.sleep(wait)
         except Exception as e:
