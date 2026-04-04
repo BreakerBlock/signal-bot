@@ -211,20 +211,19 @@ def fetch_briefing():
     print(f"[DEBUG] Raw response length: {len(raw)}")
     print(f"[DEBUG] Raw preview: {raw[:300]}")
 
-    # If Claude returned no JSON (only tool-use blocks), send a follow-up
-    # turn to force it to produce the JSON from its search results.
+    # If Claude returned no JSON (only tool-use blocks), send a fresh
+    # request explicitly asking for JSON output only — no tools this time.
     if "{" not in raw:
-        print("[DEBUG] No JSON in first response — sending follow-up turn...")
+        print("[DEBUG] No JSON in first response — sending JSON-only follow-up...")
         follow_up = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4000,
             messages=[
-                {"role": "user", "content": build_prompt(now)},
-                {"role": "assistant", "content": message.content},
                 {"role": "user", "content": (
-                    "You have finished searching. Now produce ONLY the JSON object "
-                    "with the 8 keys as instructed. No prose, no markdown fences, "
-                    "no explanation. First character must be { and last must be }."
+                    build_prompt(now) +
+                    "\n\nIMPORTANT: You must now output ONLY the JSON object described above. "
+                    "Do not use any tools. Do not write any prose. "
+                    "First character must be { and last must be }."
                 )},
             ]
         )
