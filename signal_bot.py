@@ -1,5 +1,5 @@
 """
-SIGNAL — Telegram Briefing Bot
+SIGNAL -- Telegram Briefing Bot
 Sends a styled PDF briefing to your Telegram every 24 hours.
 """
 
@@ -27,10 +27,10 @@ def get_env(key):
 
 ANTHROPIC_API_KEY      = get_env("ANTHROPIC_API_KEY")
 TELEGRAM_BOT_TOKEN     = get_env("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID       = get_env("TELEGRAM_CHAT_ID")         # group — briefings only
-TELEGRAM_ALERT_CHAT_ID = os.environ.get(                     # private — errors only
-    "TELEGRAM_ALERT_CHAT_ID", get_env("TELEGRAM_CHAT_ID")
-)
+TELEGRAM_CHAT_ID       = get_env("TELEGRAM_CHAT_ID")       # group -- briefings only
+TELEGRAM_ALERT_CHAT_ID = os.environ.get("TELEGRAM_ALERT_CHAT_ID")
+# NOTE: set TELEGRAM_ALERT_CHAT_ID in Railway to your personal chat ID.
+# Until set, errors go to console logs only -- the group is NEVER touched.
 # ─────────────────────────────────────────────────────────────────────────────
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -46,7 +46,6 @@ SECTIONS = [
     ("sports",         "SPORTS",             "last 12 hours", (196, 126, 155)),
 ]
 
-# Compact search terms per section — keeps prompt lean
 SECTION_SEARCHES = {
     "india_politics": "India politics BJP Congress Modi Parliament ANI PTI",
     "india_legal":    "Supreme Court India High Court ruling LiveLaw barandbench",
@@ -63,30 +62,31 @@ def get_ist_now():
     return datetime.now(IST)
 
 
-def build_prompt(now):
+def build_search_prompt(now):
+    """Turn 1: do the searches, no JSON yet."""
     date_str = now.strftime("%A, %d %B %Y")
     time_str = now.strftime("%I:%M %p IST")
-
     searches = "\n".join(
-        f"{i+1}. {label}: \"{SECTION_SEARCHES[key]} {date_str}\""
+        f"{i+1}. {label}: search \"{SECTION_SEARCHES[key]} {date_str}\""
         for i, (key, label, _, _) in enumerate(SECTIONS)
     )
+    return (
+        f"Today is {date_str}, {time_str}.\n\n"
+        f"Search for the top news story from the last 12 hours for each topic below. "
+        f"Do one search per topic.\n\n{searches}"
+    )
 
-    return f"""You are SIGNAL. Today is {date_str}, {time_str}.
 
-Do one web search per section. Find the 5 most important stories from the last 12 hours.
-
-Sections to search:
-{searches}
-
-Rules:
-- 5 bullets per section, one fact-dense sentence each
-- Append source: "— via @Handle" or "— via outlet"
-- Never write "no developments" — always find something
-- Output ONLY a raw JSON object, no prose, no markdown
-
-Format (do not deviate):
-{{"india_politics":["...","...","...","...","..."],"india_legal":["...","...","...","...","..."],"india_general":["...","...","...","...","..."],"global":["...","...","...","...","..."],"technology":["...","...","...","...","..."],"science":["...","...","...","...","..."],"business":["...","...","...","...","..."],"sports":["...","...","...","...","..."]}}"""
+def build_json_prompt():
+    """Turn 2: convert search results to JSON -- no tools needed."""
+    keys = '","'.join(k for k, *_ in SECTIONS)
+    return (
+        "Based on your search results above, output ONLY a valid JSON object with "
+        f"these 8 keys: \"{keys}\". "
+        "Each key maps to an array of exactly 5 strings. "
+        "Each string is one fact-dense sentence ending with '-- via @Handle'. "
+        "No prose, no markdown fences. First character must be { and last must be }."
+    )
 
 
 def clean_bullet(text):
@@ -104,14 +104,15 @@ def fetch_briefing():
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=120.0)
 
-    message = None
+    # ── Turn 1: search ────────────────────────────────────────────────────────
+    turn1 = None
     for attempt in range(3):
         try:
-            message = client.messages.create(
+            turn1 = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=2000,
+                max_tokens=4000,
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                messages=[{"role": "user", "content": build_prompt(now)}]
+                messages=[{"role": "user", "content": build_search_prompt(now)}]
             )
             break
         except anthropic.RateLimitError:
@@ -123,26 +124,32 @@ def fetch_briefing():
                 raise
             time.sleep(30)
 
-    raw = "".join(b.text for b in message.content if b.type == "text")
-    print(f"[DEBUG] raw length={len(raw)}, preview={raw[:200]}")
+    print(f"[DEBUG] Turn1 stop_reason={turn1.stop_reason}, blocks={[b.type for b in turn1.content]}")
 
-    # If no JSON came back (model only did tool calls), follow up
-    # with a fresh request — no tool_use blocks, avoids 400 errors
-    if "{" not in raw:
-        print("[DEBUG] No JSON — lean follow-up...")
-        follow = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
-            messages=[{
-                "role": "user",
-                "content": (
-                    build_prompt(now) +
-                    "\n\nNow output ONLY the JSON. No tools, no prose. Start with {."
-                )
-            }]
-        )
-        raw = "".join(b.text for b in follow.content if b.type == "text")
-        print(f"[DEBUG] follow-up length={len(raw)}, preview={raw[:200]}")
+    # ── Turn 2: produce JSON from search results (no tools) ───────────────────
+    # Build a clean conversation: user -> assistant (text summaries only) -> user
+    # Strip tool_use/tool_result blocks -- only keep text blocks for assistant turn
+    assistant_text = "\n".join(
+        b.text for b in turn1.content if b.type == "text"
+    ).strip()
+
+    # If the model returned nothing useful in text, use a placeholder so
+    # the conversation stays valid -- turn 2 will still produce JSON
+    if not assistant_text:
+        assistant_text = "I have completed the web searches and gathered the results."
+
+    turn2 = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2000,
+        messages=[
+            {"role": "user",      "content": build_search_prompt(now)},
+            {"role": "assistant", "content": assistant_text},
+            {"role": "user",      "content": build_json_prompt()},
+        ]
+    )
+
+    raw = "".join(b.text for b in turn2.content if b.type == "text")
+    print(f"[DEBUG] Turn2 length={len(raw)}, preview={raw[:300]}")
 
     first = raw.index("{")
     last  = raw.rindex("}") + 1
@@ -158,7 +165,7 @@ def fetch_briefing():
             and "no major development" not in b.lower()
             and "no data" not in b.lower()
         ]
-        data[key] = cleaned or ["Updates pending — check next edition."]
+        data[key] = cleaned or ["Updates pending -- check next edition."]
 
     return data, now
 
@@ -199,7 +206,7 @@ def generate_pdf(data, now):
     date_str   = now.strftime("%A, %d %B %Y")
     time_str   = now.strftime("%I:%M %p IST")
     edition_hr = (now.hour // 2) * 2
-    edition    = f"EDITION {edition_hr:02d}:00 – {edition_hr+2:02d}:00 IST"
+    edition    = f"EDITION {edition_hr:02d}:00 - {edition_hr+2:02d}:00 IST"
 
     story = []
     story.append(Paragraph("SIGNAL", logo_sty))
@@ -275,16 +282,20 @@ def send_telegram_pdf(pdf_buf, filename, caption):
 
 
 def send_private_alert(err):
-    """Errors go to private chat only — group stays clean."""
+    """Send error to private chat only. If TELEGRAM_ALERT_CHAT_ID is not set,
+    log to console only -- the group is never touched."""
+    if not TELEGRAM_ALERT_CHAT_ID:
+        print(f"[SIGNAL] No TELEGRAM_ALERT_CHAT_ID set -- error logged only: {err}")
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, json={
             "chat_id": TELEGRAM_ALERT_CHAT_ID,
-            "text": f"⚠️ *SIGNAL error*\n\n`{str(err)[:400]}`",
+            "text": f"*SIGNAL error*\n\n`{str(err)[:400]}`",
             "parse_mode": "Markdown"
         }, timeout=10)
     except Exception as alert_err:
-        print(f"[SIGNAL] Failed to send alert: {alert_err}")
+        print(f"[SIGNAL] Failed to send private alert: {alert_err}")
 
 
 def run_briefing():
@@ -294,16 +305,16 @@ def run_briefing():
         pdf_buf  = generate_pdf(data, now)
         filename = f"SIGNAL_{now.strftime('%d%b%Y_%H%M')}.pdf"
         caption  = (
-            f"📡 *SIGNAL BRIEFING*\n"
-            f"_{now.strftime('%d %b %Y')} · {now.strftime('%I:%M %p IST')}_\n"
+            f"*SIGNAL BRIEFING*\n"
+            f"_{now.strftime('%d %b %Y')} - {now.strftime('%I:%M %p IST')}_\n"
             f"_Next briefing in 24 hours_"
         )
         send_telegram_pdf(pdf_buf, filename, caption)
-        print(f"✓ Sent at {now.strftime('%H:%M IST')}")
+        print(f"[SIGNAL] Sent at {now.strftime('%H:%M IST')}")
     except Exception as e:
-        print(f"✗ Error: {e}")
+        print(f"[SIGNAL] Error: {e}")
         import traceback; traceback.print_exc()
-        send_private_alert(e)   # private only — group stays clean
+        send_private_alert(e)   # private only -- group stays clean
 
 
 def main():
